@@ -1,0 +1,627 @@
+---
+title: "Sielewicz Senior Thesis Part 2"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, setup}
+# NOTE: To load data, you must download both the extract's data and the DDI
+# and also set the working directory to the folder with these files (or change the path below).
+setwd("~/Box Sync/Winter2019/Senior Thesis/Raw Data")
+
+if (!require("ipumsr")) stop("Reading IPUMS data into R requires the ipumsr package. It can be installed using the following command: install.packages('ipumsr')")
+
+ddi <- read_ipums_ddi("usa_00011.xml")
+source <- read_ipums_micro(ddi)
+```
+
+```{r, cleaning}
+df <- source
+# Reformatting MET2013
+df$MET2013 <- as.character(df$MET2013)
+df$MET2013 <- as.integer(df$MET2013)
+
+# Removing NA values of INCTOT
+df$INCTOT <- as.integer(as.character(df$INCTOT))
+df <- df[df$INCTOT != 9999999, ]
+
+# Reformatting TRANTIME
+df$TRANTIME <- as.integer(df$TRANTIME)
+
+# Excluding Non-Employed individuals
+df <- df[df$EMPSTAT == 1, ]
+df <- df[df$INCTOT > 0, ]
+
+# Excluding non-metro areas
+dfmetro <- df[df$MET2013 != 0, ]
+```
+
+
+```{r, Creating Dummy Variables}
+library(fastDummies)
+library(dplyr)
+df$American <- ifelse(df$CITIZEN == 1 | df$CITIZEN == 2, 1, 0)
+df$male <- ifelse(df$SEX == 1, 1, 0)
+# Race Dummy Variables
+df$White <- ifelse(df$RACE == 1, 1, 0)
+df$Black <- ifelse(df$RACE == 2, 1, 0)
+df$FirstPeople <- ifelse(df$RACE == 3, 1, 0)
+df$Chinese <- ifelse(df$RACE == 4, 1, 0)
+df$Japanese <- ifelse(df$RACE == 5, 1, 0)
+df$Asian_Other <- ifelse(df$RACE == 6, 1, 0)
+df$OtherRace <- ifelse(df$RACE == 7, 1, 0)
+df$Multiracial <- ifelse(df$RACE == 8 | df$RACE == 9, 1, 0)
+df$race_names <- names(df[25:32])[apply(df[25:32], 1, match, x = 1)]
+# Hispanic Dummy Variable
+df$Hispanic <- ifelse(df$HISPAN == 0 | df$HISPAN == 9, 0, 1)
+# Education Dummy Variables
+df$High_School <- ifelse(df$EDUCD == 62| df$EDUCD == 63 | df$EDUCD == 64 , 1, 0)
+df$Associates <- ifelse(df$EDUCD == 81| df$EDUCD == 82 | df$EDUCD == 83 , 1, 0)
+df$Some_College <- ifelse(df$EDUCD == 65| df$EDUCD == 70 | df$EDUCD == 71 | df$EDUCD == 80 | df$EDUCD == 90 | df$EDUCD == 100 | df$EDUCD == 110 | 
+                            df$EDUCD == 111 | df$EDUCD == 112 |
+                            df$EDUCD == 113 , 1, 0)
+df$Bachelors <- ifelse(df$EDUCD == 101 , 1, 0)
+df$Masters <- ifelse(df$EDUCD == 114, 1, 0)
+df$Professional <- ifelse(df$EDUCD == 115, 1, 0)
+df$Doctoral <- ifelse(df$EDUCD == 116, 1, 0)
+df$Less_Than_HS <- ifelse(df$EDUCD >= 2 & df$EDUCD <= 61, 1, 0)
+df$Education <- names(df[35:42])[apply(df[35:42], 1, match, x = 1)]
+# Transportation Dummy Variables
+df$Motor_Vehicle <- ifelse(df$TRANWORK == 10 | df$TRANWORK == 11 | 
+                             df$TRANWORK == 12 | df$TRANWORK == 13 | 
+                             df$TRANWORK == 14 | df$TRANWORK == 15 | 
+                             df$TRANWORK == 20, 1, 0)
+df$Walk <- ifelse(df$TRANWORK == 50, 1, 0)
+df$Bicycle <- ifelse(df$TRANWORK == 40, 1, 0)
+df$Work_from_home <- ifelse(df$TRANWORK == 70, 1, 0)
+df$Public_Transport <- ifelse(df$TRANWORK >= 30 & df$TRANWORK <= 36 , 1, 0)
+df$Transport <- names(df[44:48])[apply(df[44:48], 1, match, x = 1)]
+
+# Creating Basic Race Variable 
+df$race_basic[df$race_names == "Chinese" | df$race_names == "Japanese" |
+                df$race_names == "Asian_Other"] <- "Asian"
+df$race_basic[df$race_names == "OtherRace" | df$race_names == "Multiracial"] <- "Other/Multiracial"
+df$race_basic[df$race_names == "White"] <- "White"
+df$race_basic[df$race_names == "Black"] <- "Black"
+df$race_basic[df$race_names == "FirstPeople"] <- "Native American"
+
+# Creating Basic Education Variable
+df$educ_basic[df$Education == "Doctoral" | df$Education == "Masters" |
+                df$Education == "Professional" ] <- "Graduate"
+df$educ_basic[df$Education == "Less_Than_HS"] <- "Less Than HS"
+df$educ_basic[df$Education == "Some_College" | df$Education == "High_School" | 
+                df$Education == "Associates"] <- "High School"
+df$educ_basic[df$Education == "Bachelors"] <- "Bachelors"
+
+# Creating Sex Variable with names
+df$sex <- ifelse(df$male == 1, "Male", "Female")
+
+# Crating Income Quantiles by year
+df_inc <- df[df$YEAR == 2005, ]
+df_inc <- within(df_inc, IncomeQuantile <- as.integer(cut(INCTOT, quantile(INCTOT, probs=0:10/10), include.lowest=TRUE)))
+mini_inc_summary <- df_inc %>% group_by(IncomeQuantile, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+Income_Summary2 <- mini_inc_summary
+
+for(i in 2006:2017){
+  df_inc <- df[df$YEAR == i, ]
+  df_inc <- within(df_inc, IncomeQuantile <- as.integer(cut(INCTOT, 
+                                                            quantile(INCTOT, 
+                                                                    probs=0:10/10),
+                                                            include.lowest=TRUE)))
+  mini_inc_summary <- df_inc %>% group_by(IncomeQuantile, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+  Income_Summary2 <- rbind(Income_Summary2, mini_inc_summary)
+}
+
+# df <- within(df, IncomeQuantile <- as.integer(cut(INCTOT, quantile(INCTOT, probs=0:10/10), include.lowest=TRUE)))
+```
+
+```{r, LA OLS Analysis}
+library(stargazer)
+LA_cpumas <- df[df$CPUMA0010 >= 71 & df$CPUMA0010 <= 99, ]
+LA_cpumas <- LA_cpumas[LA_cpumas$TRANTIME != 0, ]
+
+OLS_LA3 <- lm(log(TRANTIME) ~ log(INCTOT) + 
+            (sex == "Female") + Hispanic + American +
+            (race_basic== "Asian") +
+            (race_basic == "Black") +
+            (race_basic == "Native American") +
+            (race_basic == "Other/Multiracial") +
+            factor(educ_basic)-1 + 
+            (race_basic== "Asian"):(factor(educ_basic) - 1) +
+            (race_basic== "Black"):(factor(educ_basic) - 1) +
+            (race_basic== "Native American"):(factor(educ_basic) - 1) +
+            (race_basic== "Other/Multiracial"):(factor(educ_basic) - 1) +
+            factor(Transport) - 1 +
+            factor(YEAR) - 1 + 
+            factor(CPUMA0010) - 1, 
+                         data = LA_cpumas)
+OLS_LA_df3 <- as.data.frame(summary(OLS_LA3)$coefficients[,])
+summary(OLS_LA3)
+stargazer(OLS_LA3)
+
+OLS_LA7 <- lm(log(TRANTIME) ~ log(INCTOT) + 
+            (sex == "Female") + Hispanic + American +
+            (race_basic== "Asian") +
+            (race_basic == "Black") +
+            (race_basic == "Native American") +
+            (race_basic == "Other/Multiracial") +
+            factor(educ_basic)-1 + 
+            (race_basic == "Asian"):(factor(educ_basic) - 1) +
+            (race_basic == "Black"):(factor(educ_basic) - 1) +
+            (race_basic == "Native American"):(factor(educ_basic) - 1) +
+            (race_basic == "Other/Multiracial"):(factor(educ_basic) - 1) +
+            (race_basic == "Asian"):log(INCTOT) +
+            (race_basic == "Black"):log(INCTOT) +
+            (race_basic == "Native American"):log(INCTOT) +
+            (race_basic == "Other/Multiracial"):log(INCTOT) +
+            factor(Transport) - 1 +
+            factor(YEAR) - 1 + 
+            factor(CPUMA0010) - 1, 
+                         data = LA_cpumas)
+OLS_LA_df7 <- as.data.frame(summary(OLS_LA7)$coefficients[,])
+
+stargazer(OLS_LA7)
+
+```
+
+
+```{r, subsetting}
+library(dplyr)
+Race_Summary <- df %>% group_by(race_names, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+
+Race_Summary_Basic <- df %>% group_by(race_basic, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+
+Transport_Summary <- df %>% group_by(Transport, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+
+Education_Summary <- df %>% group_by(educ_basic, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+
+# Income_Summary <- df %>% group_by(IncomeQuantile, YEAR) %>% 
+#   summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+# Income_Summary$IncomeQuantile <- as.factor(Income_Summary$IncomeQuantile)
+
+Income_Summary2$IncomeQuantile <- as.factor(Income_Summary2$IncomeQuantile)
+```
+
+```{r, Visualizations}
+library(ggplot2)
+image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/Winter2019"
+
+RaceTrends <- ggplot(aes(x = YEAR, y = avgtime, color = race_names ), 
+                          data = Race_Summary) + geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", color = "Race") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size=16))
+RaceTrends
+
+RaceTrends_Basic <- ggplot(aes(x = YEAR, y = avgtime, color = race_basic ), 
+                          data = Race_Summary_Basic) + geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", color = "Race") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size=16))
+RaceTrends_Basic
+
+TransportTrends <- ggplot(aes(x = YEAR, y = avgtime, color = Transport ), 
+                          data = Transport_Summary) + geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size=16))
+TransportTrends
+
+EducationTrends <- ggplot(aes(x = YEAR, y = avgtime, color = educ_basic ), 
+                          data = Education_Summary) + geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", 
+       color = "Education Level") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size=16))
+EducationTrends
+
+IncomeQuantileTrends <- ggplot(aes(x = YEAR, y = avgtime, 
+                                   color = IncomeQuantile), 
+                          data = Income_Summary2) + geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) +
+  scale_y_continuous(breaks = c(17.5, 20, 22.5, 25, 27.5)) +
+  labs(x = "Year", y = "Average Commute Time (Minutes)", 
+       color = "Income\nDecile") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size=16))
+IncomeQuantileTrends
+
+Hispanic_lm <- lm(TRANTIME ~ YEAR + Hispanic, data = df)
+summary(Hispanic_lm)
+
+ggsave ("RaceTrends.png", plot = RaceTrends, path = image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave ("TransportTrends.png", plot = TransportTrends, path = image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave ("EducationTrends.png", plot = EducationTrends, path = image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave ("IncomeQuantileTrends.png", plot = IncomeQuantileTrends, path = image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave ("RaceTrends_Basic.png", plot = RaceTrends_Basic, path = image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, Separating by PUMA}
+library(dplyr)
+puma_summary <- df %>% group_by(PUMA, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME), 
+            avg_inc = mean(INCTOT), median_inc = median(INCTOT), 
+            prop_white = sum(White)*100/n(), 
+            prop_bach = (sum(Bachelors) + sum(Masters) + sum(Doctoral) + 
+                           sum(Professional))*100/n())
+```
+
+```{r, PUMA preliminary Visualizations}
+library(ggplot2)
+image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/Winter2019"
+
+# Puma Income - Commute Time Scatterplot
+puma_trends <- ggplot(aes(x = avg_inc, y = avgtime), 
+                                  data = puma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16)) +
+  scale_x_continuous(breaks = c(seq(0, 150000, by = 50000)), 
+                     limits = c(20000, 150000)) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50)) +
+  geom_vline(xintercept = median(puma_summary$avg_inc), 
+             color = "royalblue1", size = 0.75) + 
+  geom_smooth(method='lm',formula=y~x, color = "red", size = 0.75)
+puma_trends
+
+# Level - Log Visualization
+puma_trends_log <- ggplot(aes(x = log(avg_inc), y = avgtime), 
+                                  data = puma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "white") + 
+  labs(x = "Log(Yearly Income ($))", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16)) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50)) +
+  geom_vline(xintercept = log(median(puma_summary$avg_inc)), 
+             color = "royalblue1", size = 1) +
+  geom_smooth(method='lm',formula=y~x, color = "red", size = 1.5)
+puma_trends_log
+# Saving Plots
+ggsave("puma_trends.png", 
+       plot = puma_trends, 
+       path = image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave("puma_trends_log.png", 
+       plot = puma_trends_log, 
+       path = image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, animation}
+library(gganimate)
+puma_trends_animation <- ggplot(aes(x = avg_inc, y = avgtime), 
+                                  data = puma_summary) +
+  geom_point(alpha = 1/2, size = 2, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16)) +
+  scale_x_continuous(breaks = c(seq(0, 150000, by = 50000)), 
+                     limits = c(20000, 150000)) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50)) +
+  geom_vline(xintercept = median(puma_summary$avg_inc), 
+             color = "royalblue1", size = 0.75) +
+  transition_time(YEAR)
+puma_trends_animation
+
+anim_save("puma_trends_animation.gif",
+       plot = puma_trends_animation,
+       path = image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, PUMA Panel Analysis}
+library(tseries)   # For timeseries analysis
+library(lmtest)    # For hetoroskedasticity analysis
+library(plm)       # Panel data analysis library
+library(sandwich)
+
+# Standard OLS Model
+puma_lm <- lm(avgtime ~ log(avg_inc), data = puma_summary)
+summary(puma_lm)
+
+# OLS Model with Proportion-White and Proportion-College Educated
+puma_lm_multiple <- lm(avgtime ~ log(avg_inc) + prop_white + prop_bach, data = puma_summary)
+summary(puma_lm_multiple)
+
+# OLS Model with Interaction
+puma_lm_interaction <- lm(avgtime ~ log(avg_inc) + prop_white + prop_bach +
+                            log(avg_inc)*prop_white + log(avg_inc)*prop_bach +
+                            prop_bach*prop_white,
+                          data = puma_summary)
+summary(puma_lm_interaction)
+
+# Fixed Effects Model (log)
+puma_fixed <-lm(avgtime ~ log(avg_inc) + factor(PUMA) - 1, data = puma_summary)
+summary(puma_fixed)
+
+#Fixed Effects Model (non-log)
+puma_fixed_linear <-lm(avgtime ~ avg_inc + factor(PUMA) - 1, data = puma_summary)
+summary(puma_fixed_linear)
+
+# # Fixed Effects with prop_white and prop_bach
+# puma_fixed_multiple <-lm(avgtime ~ log(avg_inc) + prop_white + prop_bach + 
+#                            factor(PUMA) - 1, data = puma_summary)
+# summary(puma_fixed_multiple)
+
+# Heteroskedasticity Robust Fixed Effects Model
+coeftest(puma_fixed, vcov = sandwich) 
+# Adding Fitted Values to dataframe
+puma_summary$fit <- predict(puma_fixed)
+
+# Finding Average Fixed Effect and Slope Coefficient
+fixed_effects_df <- as.data.frame(summary(puma_fixed)$coefficients[,])
+fe_slope <- fixed_effects_df[1,1]
+fe_intercept <- mean(fixed_effects_df$Estimate[2:nrow(fixed_effects_df)])
+
+summary(puma_summary$prop_white)
+summary(puma_summary$prop_bach)
+```
+
+```{r, Fixed Effects visualization}
+library(ggplot2)
+# Fixed Effects Visualization with average FE as intercept (log model)
+puma_trends_log_fit <- ggplot(aes(x = log(avg_inc), y = avgtime), 
+                                  data = puma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "white") + 
+  labs(x = "Log(Yearly Income ($))", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16)) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50)) + 
+  geom_abline(color = "royalblue1", size = 1.5,
+              slope = fe_slope, intercept = fe_intercept)
+puma_trends_log_fit
+
+# Fixed Effect Visualization with average FE as intercept
+puma_trends_fit <- ggplot(aes(x = avg_inc, y = avgtime), 
+                                  data = puma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16)) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50))
+puma_trends_fit
+
+# Saving Plots
+ggsave("puma_trends_log_fit.png", 
+       plot = puma_trends_log_fit, 
+       path = image_loc, height = 7.5, width = 13.33, units = "in")
+# ggsave("puma_trends_log_fit.png", 
+#        plot = puma_trends_log_fit, 
+#        path = image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, PUMAS packages}
+library(dplyr)
+library(tigris)
+library(acs)
+library(stringr)
+library(leaflet)
+library(htmlwidgets)
+# grab the spatial data (tigris)
+pumasCA <- pumas(state='CA',cb=TRUE)
+pumasNY <- pumas(state='NY',cb=TRUE)
+api.key.install(key="cb7c86d43f6da5929636c833218df66d99ce6f0b")
+# create a geographic set to grab tabular data (acs)
+geo <- geo.make(state=c('CA'), puma='*')
+geo
+
+LA_PUMAS <- df[df$MET2013 == 31080 & df$PUMA >= 03701 & df$PUMA <= 03769, ]
+puma_summary_LA <- LA_PUMAS %>% group_by(PUMA, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME), 
+            avg_inc = mean(INCTOT), median_inc = median(INCTOT), 
+            prop_white = sum(White)*100/n(), 
+            prop_bach = (sum(Bachelors) + sum(Masters) + sum(Doctoral) + 
+                           sum(Professional))*100/n())
+```
+
+```{r, Testing}
+library(tigris)
+library(sp)
+
+us_states <- unique(fips_codes$state)[1:51]
+
+continental_states <- us_states[!us_states %in% c("AK", "HI")]
+pumas_list <- lapply(continental_states, function(x) {
+  pumas(state = x, cb = TRUE)
+  })
+
+us_pumas <- rbind_tigris(pumas_list)
+
+plot(us_pumas)
+
+California <- us_states[us_states %in% c("CA")]
+pumas_list_ca <- lapply(California, function(x) {
+  pumas(state = x, cb = TRUE)
+})
+
+ca_pumas <- rbind_tigris(pumas_list_ca)
+
+plot(ca_pumas)
+# Using FIPS code 037 For Los Angeles County
+geo<-geo.make(state=c("CA"),
+              county=37)
+geo
+commute_times_LA <- acs.fetch(endyear=2017,span=5,geography=geo,
+                      table.number=3,col.names="pretty")
+```
+
+Final Visualizations: Light Theme
+```{r, Final Visualizations}
+library(ggplot2)
+final_image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/FinalGraphs"
+
+RaceTrends.f <- ggplot(aes(x = YEAR, y = avgtime, color = race_names ), 
+                          data = Race_Summary) + geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", color = "Race") + 
+  theme(axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size=16))
+RaceTrends.f
+
+RaceTrends_Basic.f <- ggplot(aes(x = YEAR, y = avgtime, color = race_basic ), 
+                          data = Race_Summary_Basic) + geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", color = "Race") + 
+  theme(axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size=16))
+RaceTrends_Basic.f
+
+TransportTrends.f <- ggplot(aes(x = YEAR, y = avgtime, color = Transport ), 
+                          data = Transport_Summary) + geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)") + 
+  theme(axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size=16))
+TransportTrends.f
+
+EducationTrends.f <- ggplot(aes(x = YEAR, y = avgtime, color = educ_basic ), 
+                          data = Education_Summary) + geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", 
+       color = "Education Level") + 
+  theme(axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size=16))
+EducationTrends.f
+
+IncomeQuantileTrends.f <- ggplot(aes(x = YEAR, y = avgtime, 
+                                   color = IncomeQuantile), 
+                          data = Income_Summary2) + geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) +
+  scale_y_continuous(breaks = c(17.5, 20, 22.5, 25, 27.5)) +
+  labs(x = "Year", y = "Average Commute Time (Minutes)", 
+       color = "Income\nDecile") + 
+  theme(axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size=16))
+IncomeQuantileTrends.f
+
+Hispanic_lm <- lm(TRANTIME ~ YEAR + Hispanic, data = df)
+summary(Hispanic_lm)
+
+ggsave ("RaceTrends.png", plot = RaceTrends.f, path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave ("TransportTrends.png", plot = TransportTrends.f, path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave ("EducationTrends.png", plot = EducationTrends.f, path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave ("IncomeQuantileTrends.png", plot = IncomeQuantileTrends.f, path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave ("RaceTrends_Basic.png", plot = RaceTrends_Basic.f, path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+
+```

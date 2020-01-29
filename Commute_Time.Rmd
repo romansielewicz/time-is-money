@@ -1,0 +1,580 @@
+---
+title: "Sielewicz Senior Thesis"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# reading in usa_00002.dat (commute data for year 2016)
+setwd("~/GoogleDrive/Past Academics/UCSB/Winter2019/Senior Thesis/Raw Data")
+# NOTE: To load data, you must download both the extract's data and the DDI
+# and also set the working directory to the folder with these files (or change the path below).
+
+if (!require("ipumsr")) stop("Reading IPUMS data into R requires the ipumsr package. It can be installed using the following command: install.packages('ipumsr')")
+
+ddi <- read_ipums_ddi("usa_00011.xml")
+source <- read_ipums_micro(ddi)
+```
+
+```{r, cleaning}
+df <- source
+
+# Removing NA values of INCTOT
+df <- df[df$INCTOT != 9999999, ]
+# Excluding Non-Employed individuals
+df <- df[df$EMPSTAT == 1, ]
+df <- df[df$INCTOT > 0, ]
+
+# Reformatting TRANTIME
+df$TRANTIME <- as.integer(df$TRANTIME)
+
+# Excluding non-metro areas
+dfmetro <- df[df$MET2013 != 0, ]
+
+# New Dataframe with only middle 90% of individuals by income
+middle90 <- dfmetro[dfmetro$INCTOT > 4200 & dfmetro$INCTOT < 150001, ]
+# New Dataframe with only middle 90% of individuals by income and TRANTIME
+middle90_tran <- dfmetro[dfmetro$TRANTIME > 0 & dfmetro$TRANTIME < 61, ]
+
+# lm1 <- lm(TRANTIME ~ log(INCTOT), data = dfmetro)
+# summary(lm1)
+# 
+# lm2 <- lm(TRANTIME ~ (1/INCTOT), data = dfmetro)
+# summary(lm2)
+# 
+# lm3 <- lm(TRANTIME ~ log(INCTOT), data = dfmetro)
+# summary(lm3)
+# 
+# lm4 <- lm(TRANTIME ~ I(10000/INCTOT), data = middle90)
+# summary(lm4)
+# 
+# lm5 <- lm(TRANTIME ~ INCTOT, data = dfmetro)
+# summary(lm5)
+```
+
+```{r, Summary Statistics}
+mean(df$INCTOT)
+mean(dfmetro$INCTOT)
+quantile(dfmetro$INCTOT, probs = 0.75)
+mean(df$TRANTIME)
+mean(dfmetro$TRANTIME)
+median(df$TRANTIME)
+median(dfmetro$TRANTIME)
+```
+
+```{r, Subsetting}
+library(dplyr)
+library(fastDummies)
+setwd("~/Box Sync/Winter2019/Senior Thesis/Raw Data")
+MetroCodes <- read.csv("MetroList.csv")
+colnames(MetroCodes)[1] <- "geo"
+
+MetList <- as.list(MetroCodes$MET2013)
+
+bigmetros <- dfmetro[(dfmetro$MET2013 %in% MetList), ]
+#bigmetros$CBSERIAL <- as.integer(as.character(bigmetros$CBSERIAL))
+
+bigmetros <- merge(x = bigmetros, y = MetroCodes, by = "MET2013", all.x = TRUE)
+
+# bigmetros <- dummy_cols(bigmetros, select_columns = "geo")
+
+TimeByYear <- bigmetros %>% group_by(geo, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+
+topcitieslist <- as.list(c("NYC", "LA", "CHI", "Dallas", "Washington", "Miami", "Atlanta", "Boston", "SF", "Seattle", "SD"))
+
+top5citieslist <- as.list(c("NYC", "LA", "CHI", "Washington", "SF"))
+
+topcitiescodes <- MetroCodes[(MetroCodes$geo %in% topcitieslist), ]
+top5citiescodes <- MetroCodes[(MetroCodes$geo %in% top5citieslist), ]
+
+topcities <- bigmetros[(bigmetros$geo %in% topcitieslist), ]
+topcities <- topcities[topcities$INCTOT != 0, ]
+
+top5cities <- bigmetros[(bigmetros$geo %in% top5citieslist), ]
+top5cities <- top5cities[top5cities$INCTOT != 0, ]
+
+TimeByYearTop <- topcities %>% group_by(geo, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+
+TimeByYearTop5 <- top5cities %>% group_by(geo, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+```
+
+```{r, Visualizations, All Metros}
+library(ggplot2)
+image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/Fall2018"
+
+# All metroplitan areas plotted
+incometrends_all <- ggplot(aes(x = INCTOT, y = TRANTIME), data = dfmetro) +
+  geom_point(alpha = 1/10, size = 0.5) + 
+  labs(x = "Total Yearly Income ($)", y = "Commute Time (Minutes)") +
+  geom_hline(yintercept = mean(dfmetro$TRANTIME), 
+             color = "royalblue1", size = 1.5)
+
+incometrends_all_dark <- ggplot(aes(x = INCTOT, y = TRANTIME), data = dfmetro) +
+  geom_point(alpha = 1/10, size = 0.5, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  geom_hline(yintercept = mean(dfmetro$TRANTIME), 
+             color = "royalblue1", size = 1.5) + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_x_continuous(breaks = c(seq(0, 750000, by = 50000)), 
+                     limits = c(0, 750000))
+
+incometrends_all_dark_lm <- ggplot(aes(x = INCTOT, y = TRANTIME), data = dfmetro) +
+  geom_point(alpha = 1/10, size = 0.5, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_x_continuous(breaks = c(seq(0, 750000, by = 50000)), 
+                     limits = c(0, 750000)) +
+  geom_smooth(method='lm',formula=y~x, color = "red", size = 1.5)
+
+incometrends_all_dark_lm_median <- ggplot(aes(x = INCTOT, y = TRANTIME), data = dfmetro) +
+  geom_point(alpha = 1/10, size = 0.5, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_x_continuous(breaks = c(seq(0, 750000, by = 50000)), 
+                     limits = c(0, 750000)) +
+  geom_smooth(method='lm',formula=y~x, color = "red", size = 1.5) +
+  geom_vline(xintercept = median(dfmetro$INCTOT), 
+             color = "royalblue1", size = 1.5)
+
+incometrends_all_lm_median <- ggplot(aes(x = INCTOT, y = TRANTIME), data = dfmetro) +
+  geom_point(alpha = 1/10, size = 0.5) + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  scale_x_continuous(breaks = c(seq(0, 750000, by = 50000)), 
+                     limits = c(0, 750000)) +
+  geom_smooth(method='lm',formula=y~x, color = "red", size = 1.5) +
+  geom_vline(xintercept = median(dfmetro$INCTOT), 
+             color = "royalblue1", size = 1.5)
+
+incometrends_all_dark_hyperbola <- ggplot(aes(x = INCTOT, y = TRANTIME), 
+                                          data = dfmetro) +
+  geom_point(alpha = 1/10, size = 0.5, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_x_continuous(breaks = c(seq(0, 750000, by = 50000)), 
+                     limits = c(0, 750000)) + 
+  stat_smooth(method = "lm", formula = "y ~ I(1/x)", colour = "red", size = 1)
+
+incometrends_middle_90 <- ggplot(aes(x = INCTOT, y = TRANTIME), 
+                                  data = dfmetro) +
+  geom_point(alpha = 1/100, size = 1, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_x_continuous(breaks = c(seq(0, 150000, by = 50000)), 
+                     limits = c(4200, 150000)) +
+  geom_vline(xintercept = median(dfmetro$INCTOT), 
+             color = "royalblue1", size = 1.5)
+
+incometrends_middle_90_tran <- ggplot(aes(x = INCTOT, y = TRANTIME), 
+                                  data = dfmetro) +
+  geom_point(alpha = 1/20, size = 1, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_x_continuous(breaks = c(seq(0, 150000, by = 50000)), 
+                     limits = c(4200, 150000)) +
+  scale_y_continuous(breaks = c(seq(0, 60, by = 10)), limits = c(0,60)) +
+  geom_vline(xintercept = median(dfmetro$INCTOT), 
+             color = "royalblue1", size = 1.5)
+
+incometrends_middle_90_tran_light <- ggplot(aes(x = INCTOT, y = TRANTIME), 
+                                  data = dfmetro) +
+  geom_point(alpha = 1/20, size = 1) + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  scale_x_continuous(breaks = c(seq(0, 150000, by = 50000)), 
+                     limits = c(4200, 150000)) +
+  scale_y_continuous(breaks = c(seq(0, 60, by = 10)), limits = c(0,60)) +
+  geom_vline(xintercept = median(dfmetro$INCTOT), 
+             color = "royalblue1", size = 1.5)
+
+incometrends_middle_90_tran_light1 <- ggplot(aes(x = INCTOT, y = TRANTIME), 
+                                  data = dfmetro) +
+  geom_point(alpha = 1/20, size = 3) + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  scale_x_continuous(breaks = c(seq(0, 150000, by = 50000)), 
+                     limits = c(4200, 150000)) +
+  scale_y_continuous(breaks = c(seq(0, 60, by = 10)), limits = c(0,60)) +
+  geom_vline(xintercept = median(dfmetro$INCTOT), 
+             color = "royalblue1", size = 1.5)
+#saving plot for all metro areas
+ggsave("incometrends_all_metro.png", plot = incometrends_all, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("incometrends_all_metro_dark.png", plot = incometrends_all_dark, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("incometrends_all_metro_dark_lm.png", plot = incometrends_all_dark_lm, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("incometrends_all_metro_dark_lm_median.png", plot = incometrends_all_dark_lm_median, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("incometrends_all_metro_lm_median.png", 
+       plot = incometrends_all_lm_median, 
+        path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("incometrends_all_metro_dark_hyperbola.png", plot = incometrends_all_dark_hyperbola, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("incometrends_middle_90.png", plot = incometrends_middle_90, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("incometrends_middle_90_tran.png", plot = incometrends_middle_90_tran, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("incometrends_middle_90_tran_light.png", 
+       plot = incometrends_middle_90_tran_light, 
+       path = image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave("incometrends_middle_90_tran_light1.png", 
+       plot = incometrends_middle_90_tran_light1, 
+       path = image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, Visualizations top 30 Metros}
+library(ggplot2)
+image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/Fall2018"
+
+# Top 30 Cities Plotted
+citytrends <- ggplot(aes(x = YEAR, y = avgtime, color = geo ), data = TimeByYear) + geom_line() + scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017))
+
+citytrends_dark <- ggplot(aes(x = YEAR, y = avgtime, color = geo ), 
+                          data = TimeByYear) + geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5)))
+
+incometrends <- ggplot(aes(x = INCTOT, y = TRANTIME), data = bigmetros) + 
+  geom_point(alpha = 1/10, size = 0.5) + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)")
+
+incometrends_dark <- ggplot(aes(x = INCTOT, y = TRANTIME), data = bigmetros) + 
+  geom_point(alpha = 1/10, size = 0.5, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5)))
+
+# Saving plots for Top 30 metro Areas
+
+# ggsave ("incometrends_30_metros.png", plot = incometrends, path = image_loc, height = 7.5, width = 13.33, units = "in")
+ 
+# ggsave("citytrends_30.png", plot = citytrends, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave ("incometrends_30_metros_dark.png", plot = incometrends_dark, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("citytrends_30_dark.png", plot = citytrends_dark, path = image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, Visualizations Top 11 Metros}
+library(ggplot2)
+image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/Fall2018"
+
+# Selection of 11 Cities Plotted
+
+topcitytrends <- ggplot(aes(x = YEAR, y = avgtime, color = geo ), 
+                        data = TimeByYearTop) + 
+  geom_line(size = 0.8) + 
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", color = "Metro Area")
+
+topcitytrends_dark <- ggplot(aes(x = YEAR, y = avgtime, color = geo ),
+                             data = TimeByYearTop) + 
+  geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", color = "Metro Area") +
+  theme_dark() +
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5, 
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"), 
+        legend.background = element_rect(fill = "black"), 
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16))
+
+topincometrends <- ggplot(aes(x = INCTOT, y = TRANTIME), data = topcities) + 
+  geom_point(alpha = 1/10, size = 0.5) + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)")
+
+topincometrends_lm <- ggplot(aes(x = INCTOT, y = TRANTIME), data = topcities) + 
+  geom_point(alpha = 1/10, size = 0.5) + 
+  stat_smooth(method = "nls", formula = "y~ log(x)") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)")
+
+topincometrends_dark <- ggplot(aes(x = INCTOT, y = TRANTIME), 
+                               data = topcities) + 
+  geom_point(alpha = 1/10, size = 0.5, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"))
+
+# Saving Plots for top 11 Metro Areas
+
+# ggsave("topcitytrends.png", plot = topcitytrends, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("topcitytrends_dark.png", plot = topcitytrends_dark, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+# ggsave("topincometrends.png", plot = topincometrends, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+# ggsave("topincometrends_lm.png", plot = topincometrends_lm, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("topincometrends_dark.png", plot = topincometrends_dark, path = image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+
+```{r, 5 cities plotted}
+top5citytrends <- ggplot(aes(x = YEAR, y = avgtime, color = geo ), 
+                        data = TimeByYearTop5) + 
+  geom_line(size = 0.8) + 
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", color = "Metro Area") +
+  theme(axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16))
+
+top5citytrends_dark <- ggplot(aes(x = YEAR, y = avgtime, color = geo ),
+                             data = TimeByYearTop5) + 
+  geom_line(size = 0.8) +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", color = "Metro Area") +
+  theme_dark() +
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5, 
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"), 
+        legend.background = element_rect(fill = "black"), 
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size = 16))
+top5citytrends_dark
+
+ggsave("top5citytrends.png", plot = top5citytrends, path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("top5citytrends_dark.png", plot = top5citytrends_dark, path = image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, Log Log visualization}
+library(ggplot2)
+loglog_incometrends <- ggplot(aes(x = log(INCTOT), y = log(TRANTIME)), 
+                               data = middle90_tran) + 
+  geom_point(alpha = 1/10, size = 0.5, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5)))
+loglog_incometrends
+```
+
+```{r, Poor Vs Rich}
+library(ggplot2)
+library(dplyr)
+
+poor <- dfmetro[dfmetro$INCTOT <= mean(dfmetro$INCTOT), ]
+rich <- dfmetro[dfmetro$INCTOT > mean(dfmetro$INCTOT), ]
+
+# poor <- dfmetro[dfmetro$INCTOT <= 105000, ]
+# rich <- dfmetro[dfmetro$INCTOT > 105000, ]
+
+poorTimeByYear <- poor %>% group_by(YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+
+richTimeByYear <- rich %>% group_by(YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+
+richTrends <- ggplot(aes(x = YEAR, y = avgtime), data = richTimeByYear) + 
+  geom_line(size = 0.8, colour = "purple") +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", color = "Metro Area") +
+  theme_dark() +
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5, 
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"), 
+        legend.background = element_rect(fill = "black"), 
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5)))
+
+poorTrends <- ggplot(aes(x = YEAR, y = avgtime), data = poorTimeByYear) + 
+  geom_line(size = 0.8, colour = "red") +
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", color = "Metro Area") +
+  theme_dark() +
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5, 
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"), 
+        legend.background = element_rect(fill = "black"), 
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"),
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5)))
+
+poorTrends
+richTrends
+```
+
+```{r, dark theme}
+ # theme(plot.background = element_rect(fill = "black"),
+ #        axis.line = element_line(size = 0.5,
+ #                                 linetype = "solid", color = "white"),
+ #        axis.text = element_text(size = rel(1), color = "white"),
+ #        text = element_text(colour = "white"),
+ #        legend.background = element_rect(fill = "black"),
+ #        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+ #        legend.key = element_rect(fill = "grey22", colour = "grey22"))
+```
+
+Final Visualizations: Light Theme
+```{r, Final Visualizations}
+library(ggplot2)
+final_image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/FinalGraphs"
+
+incometrends_all.f <- ggplot(aes(x = INCTOT, y = TRANTIME), data = dfmetro) +
+  geom_point(alpha = 1/10, size = 0.5) + 
+  labs(x = "Total Yearly Income ($)", y = "Commute Time (Minutes)") +
+  geom_vline(xintercept = median(dfmetro$INCTOT), 
+             color = "royalblue1", size = 1.5)
+incometrends_all.f
+
+incometrends_all_log_log.f <- ggplot(aes(x = log(INCTOT), y = log(TRANTIME)), 
+                                     data = dfmetro) +
+  geom_point(alpha = 1/10, size = 0.5) + 
+  labs(x = "Log(Total Yearly Income ($))", y = "Log(Commute Time (Minutes))") +
+  geom_vline(xintercept = median(log(dfmetro$INCTOT)), 
+             color = "royalblue1", size = 1.5)
+incometrends_all_log_log.f
+#Saving Plots
+ggsave("incometrends_all.png", plot = incometrends_all.f, path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave("incometrends_all_log_log.png", plot = incometrends_all_log_log.f, path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, Final City Visualizations}
+library(ggplot2)
+final_image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/FinalGraphs"
+
+top5citytrends.f <- ggplot(aes(x = YEAR, y = avgtime, color = geo ), 
+                        data = TimeByYearTop5) + 
+  geom_line(size = 0.8) + 
+  scale_x_continuous(breaks = c(2005, 2007, 2009, 2011, 2013, 2015, 2017)) + 
+  labs(x = "Year", y = "Average Commute Time (Minutes)", color = "Metro Area") +
+  theme(axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16),
+        legend.text=element_text(size=16),
+        legend.title = element_text(size=16))
+
+ggsave("top5citytrends.png", plot = top5citytrends.f, path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, Final Distribution}
+library(ggplot2)
+final_image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/FinalGraphs"
+distribution.f <- ggplot(aes(x = INCTOT, y = TRANTIME), data = dfmetro) +
+  geom_point(alpha = 1/10, size = 0.5) + 
+  labs(x = "Total Yearly Income ($)", y = "Commute Time (Minutes)") +
+  geom_vline(xintercept = median(dfmetro$INCTOT), 
+             color = "royalblue1", size = 1.5) + 
+  theme(axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5)))
+
+ggsave("distribution.png", plot = distribution.f, path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+```

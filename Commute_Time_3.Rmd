@@ -1,0 +1,792 @@
+---
+title: "Commute Time 3"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, Importing Data}
+setwd("~/Google Drive/Past Academics/UCSB/Winter2019/Senior Thesis/Raw Data")
+
+if (!require("ipumsr")) stop("Reading IPUMS data into R requires the ipumsr package. It can be installed using the following command: install.packages('ipumsr')")
+
+ddi <- read_ipums_ddi("usa_00011.xml")
+source <- read_ipums_micro(ddi)
+conversion <- read.csv("Puma_Conversion.csv")
+MetroCodes <- read.csv("MetroList.csv")
+```
+
+```{r, Cleaning}
+df <- source
+# Removing NA values of INCTOT
+df <- df[df$INCTOT != 9999999, ]
+# Excluding Non-Employed individuals
+df <- df[df$EMPSTAT == 1, ]
+df <- df[df$INCTOT > 0, ]
+dfmetro <- df[df$MET2013 != 0, ]
+```
+
+```{r, subsetting for OLS Analysis}
+library(dplyr)
+library(fastDummies)
+setwd("~/Box Sync/Winter2019/Senior Thesis/Raw Data")
+MetroCodes <- read.csv("MetroList.csv")
+colnames(MetroCodes)[1] <- "geo"
+
+MetList <- as.list(MetroCodes$MET2013)
+
+bigmetros <- dfmetro[(dfmetro$MET2013 %in% MetList), ]
+#bigmetros$CBSERIAL <- as.integer(as.character(bigmetros$CBSERIAL))
+
+bigmetros <- merge(x = bigmetros, y = MetroCodes, by = "MET2013", all.x = TRUE)
+
+# bigmetros <- dummy_cols(bigmetros, select_columns = "geo")
+
+TimeByYear <- bigmetros %>% group_by(geo, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+
+topcitieslist <- as.list(c("NYC", "LA", "CHI", "Dallas", "Washington", "Miami", "Atlanta", "Boston", "SF", "Seattle", "SD"))
+
+top5citieslist <- as.list(c("NYC", "LA", "CHI", "Washington", "SF"))
+
+topcitiescodes <- MetroCodes[(MetroCodes$geo %in% topcitieslist), ]
+top5citiescodes <- MetroCodes[(MetroCodes$geo %in% top5citieslist), ]
+
+topcities <- bigmetros[(bigmetros$geo %in% topcitieslist), ]
+topcities <- topcities[topcities$INCTOT != 0, ]
+
+top5cities <- bigmetros[(bigmetros$geo %in% top5citieslist), ]
+top5cities <- top5cities[top5cities$INCTOT != 0, ]
+```
+
+```{r, OLS Analysis}
+# lm1 <- lm(TRANTIME ~ log(INCTOT) + factor(RACE)-1 + factor(EDUCD)-1 + 
+#             factor(YEAR) - 1 + factor(CPUMA0010) - 1, 
+#                          data = top5cities)
+# summary(lm1)
+# OLS5_df <- as.data.frame(summary(lm1)$coefficients[,])
+# 
+# lm2 <- lm(TRANTIME ~ log(INCTOT) + factor(RACE)-1 + factor(EDUCD)-1 + 
+#             (factor(RACE)-1):(factor(EDUCD - 1)) +
+#             factor(YEAR) - 1 + factor(CPUMA0010) - 1, 
+#                          data = top5cities)
+# OLS5_df2 <- as.data.frame(summary(lm2)$coefficients[,])
+```
+
+```{r, Separating by Consistent PUMA}
+library(dplyr)
+library(reldist)
+cpuma_summary <- df %>% group_by(CPUMA0010, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME), 
+            avg_inc = mean(INCTOT), median_inc = median(INCTOT),
+            prop_white = sum(RACE == 1)*100/n(),
+            prop_bach = sum(EDUCD == 101 | (EDUCD >= 114 & EDUCD <= 116) )*100/n(),
+            gini = gini(INCTOT))
+```
+
+```{r, CPUMA Panel Analysis}
+library(tseries)   # For timeseries analysis
+library(lmtest)    # For heteroskedasticity analysis
+library(plm)       # Panel data analysis library
+library(sandwich)
+
+# Standard OLS Model
+cpuma_lm <- lm(avgtime ~ log(avg_inc), data = cpuma_summary)
+summary(cpuma_lm)
+OLS_df <- as.data.frame(summary(cpuma_lm)$coefficients[,])
+OLS_df <- OLS_df[,1:2]
+for (i in 1:3){
+  OLS_df[nrow(OLS_df)+1,] <- NA
+}
+rownames(OLS_df) <- c("(Intercept)", "log(avg_inc)", "prop_white", "prop_bach", "prop_white:prop_bach")
+
+# OLS Model with Proportion-White and Proportion-College Educated
+cpuma_lm_multiple <- lm(avgtime ~ log(avg_inc) + prop_white + prop_bach +
+                          prop_white:prop_bach, data = cpuma_summary)
+summary(cpuma_lm_multiple)
+
+OLS_df2 <- as.data.frame(summary(cpuma_lm_multiple)$coefficients[,])
+OLS_df2 <- OLS_df2[,1:2]
+
+# OLS Model with Interaction
+cpuma_lm_interaction <- lm(avgtime ~ log(avg_inc) + prop_white + prop_bach +
+                            log(avg_inc)*prop_white + log(avg_inc)*prop_bach +
+                            prop_bach*prop_white,
+                          data = cpuma_summary)
+summary(cpuma_lm_interaction)
+
+# Fixed Effects Model (log)
+# cpuma_fixed <-lm(avgtime ~ log(avg_inc) + factor(CPUMA0010) - 1, data = cpuma_summary)
+# summary(cpuma_fixed)
+
+#Fixed Effects Model (non-log)
+# cpuma_fixed_linear <-lm(avgtime ~ avg_inc + factor(CPUMA0010) - 1, data = cpuma_summary)
+# summary(cpuma_fixed_linear)
+
+# CPUMA and Year fixed effects 
+cpuma_fixed_multiple <-lm(avgtime ~ log(avg_inc) + prop_white + prop_bach +
+                            prop_bach:prop_white + factor(YEAR) - 1 + 
+                            factor(CPUMA0010) - 1, 
+                         data = cpuma_summary)
+#summary(cpuma_fixed_multiple)
+
+# Heteroskedasticity Robust Fixed Effects Model
+coeftest(cpuma_fixed_multiple, vcov = sandwich) 
+# Adding Fitted Values to dataframe
+cpuma_summary$fit <- predict(cpuma_fixed_multiple)
+
+# Finding Average Fixed Effect and Slope Coefficient
+fixed_effects_df <- as.data.frame(summary(cpuma_fixed_multiple)$coefficients[,])
+fe_slope <- fixed_effects_df[1,1]
+fe_intercept <- mean(fixed_effects_df$Estimate[2:nrow(fixed_effects_df)])
+intercept_df <- data.frame(fe_intercept, NA)
+names(intercept_df)<-c("Estimate","Std. Error")
+rownames(intercept_df) <- "(Intercept)"
+
+# summary(cpuma_summary$prop_white)
+# summary(cpuma_summary$prop_bach)
+```
+
+```{r, CPUMA Log-Log Analysis}
+library(stargazer)
+cpuma_log_log <- lm(log(avgtime) ~ log(avg_inc), data = cpuma_summary)
+
+cpuma_log_log2 <- lm(log(avgtime) ~ log(avg_inc) + prop_white + 
+                            prop_bach +
+                            prop_bach:prop_white,
+                     data = cpuma_summary)
+
+cpuma_fixed_log_log <-lm(log(avgtime) ~ log(avg_inc) + prop_white + 
+                            prop_bach +
+                            prop_bach:prop_white + factor(YEAR) - 1 + 
+                            factor(CPUMA0010) - 1, 
+                         data = cpuma_summary)
+stargazer(cpuma_log_log, cpuma_log_log2, cpuma_fixed_log_log)
+
+fixed_effects_df_log <- as.data.frame(summary(cpuma_fixed_log_log)$coefficients[,])
+fe_slope_log <- fixed_effects_df_log[1,1]
+fe_intercept_log <- mean(fixed_effects_df_log$Estimate[4:12])
+
+cpuma_fixed_gini1 <-lm(log(avgtime) ~ log(avg_inc) + prop_white + prop_bach + gini +
+                            prop_bach:prop_white + factor(YEAR) - 1 + 
+                            factor(CPUMA0010) - 1, 
+                         data = cpuma_summary)
+
+cpuma_fixed_gini2 <-lm(log(avgtime) ~ log(avg_inc) + prop_white + prop_bach + gini +
+                            log(avg_inc):gini + 
+                            prop_bach:prop_white + factor(YEAR) - 1 + 
+                            factor(CPUMA0010) - 1, 
+                         data = cpuma_summary)
+fe_gini_df <- as.data.frame(summary(cpuma_fixed_gini2)$coefficients[,])
+
+stargazer(cpuma_fixed_log_log, cpuma_fixed_gini1, cpuma_fixed_gini2, dep.var.labels = "log(Avg Commute Time)")
+```
+
+```{r, Initial Tables}
+library(stargazer)
+library(xtable)
+# stargazer(cpuma_lm, cpuma_lm_interaction, cpuma_fixed_multiple, type = "text",
+#           covariate.labels=c("Log(Average Income)",
+#                              "Percentage White",
+#                              "Percentage with a Bachelors degree or higher",
+#                              "Interaction"))
+# 
+# stargazer(cpuma_lm, cpuma_lm_interaction, cpuma_fixed_multiple, title="Test", align=TRUE)
+
+tabledf <- fixed_effects_df[1:3, ]
+tabledf <- rbind(tabledf, fixed_effects_df[nrow(fixed_effects_df), ])
+tabledf <- tabledf[,1:2]
+tabledf <- rbind(intercept_df, tabledf)
+tabledf <- cbind(OLS_df, OLS_df2, tabledf)
+tabledf1 <- data.frame(t(tabledf))
+tabledf1 <- tabledf1[,2:5]
+
+xtable(tabledf1)
+```
+
+```{r, Top Metro Areas Only}
+library(dplyr)
+library(fastDummies)
+cpuma_summary_metro <- dfmetro %>% group_by(CPUMA0010, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME), 
+            avg_inc = mean(INCTOT), median_inc = median(INCTOT),
+            prop_white = sum(RACE == 1)*100/n(),
+            prop_bach = sum(EDUCD == 101 | (EDUCD >= 114 & EDUCD <= 116) )*100/n() )
+
+colnames(MetroCodes)[1] <- "geo"
+
+MetList <- as.list(MetroCodes$MET2013)
+
+bigmetros <- dfmetro[(dfmetro$MET2013 %in% MetList), ]
+
+bigmetros <- merge(x = bigmetros, y = MetroCodes, by = "MET2013", all.x = TRUE)
+
+# bigmetros <- dummy_cols(bigmetros, select_columns = "geo")
+
+TimeByYear <- bigmetros %>% group_by(geo, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME))
+
+topcitieslist <- as.list(c("NY", "LA", "CHI", "Dallas", "Washington", "Miami", "Atlanta", "Boston", "SF", "Seattle", "SD"))
+
+topcitiescodes <- MetroCodes[(MetroCodes$geo %in% topcitieslist), ]
+
+topcities <- bigmetros[(bigmetros$geo %in% topcitieslist), ]
+
+```
+
+```{r, Metro Analysis}
+library(tseries)   # For timeseries analysis
+library(lmtest)    # For hetoroskedasticity analysis
+library(plm)       # Panel data analysis library
+library(sandwich)
+
+# Standard OLS Model
+cpuma_lm_metro <- lm(avgtime ~ log(avg_inc), data = cpuma_summary_metro)
+summary(cpuma_lm_metro)
+# OLS_df <- as.data.frame(summary(cpuma_lm)$coefficients[,])
+# OLS_df <- OLS_df[,1:2]
+# for (i in 1:3){
+#   OLS_df[nrow(OLS_df)+1,] <- NA
+# }
+# rownames(OLS_df) <- c("(Intercept)", "log(avg_inc)", "prop_white", "prop_bach", "prop_white:prop_bach")
+
+# OLS Model with Proportion-White and Proportion-College Educated
+cpuma_lm_multiple_metro <- lm(avgtime ~ log(avg_inc) + prop_white + prop_bach +
+                          prop_white:prop_bach, data = cpuma_summary_metro)
+summary(cpuma_lm_multiple_metro)
+
+Metro_OLS_df2 <- as.data.frame(summary(cpuma_lm_multiple_metro)$coefficients[,])
+# OLS_df2 <- OLS_df2[,1:2]
+
+#  OLS Model with Interaction
+# cpuma_lm_interaction <- lm(avgtime ~ log(avg_inc) + prop_white + prop_bach +
+#                             log(avg_inc)*prop_white + log(avg_inc)*prop_bach +
+#                             prop_bach*prop_white,
+#                           data = cpuma_summary)
+# summary(cpuma_lm_interaction)
+
+# Fixed Effects Model (log)
+# cpuma_fixed <-lm(avgtime ~ log(avg_inc) + factor(CPUMA0010) - 1, data = cpuma_summary)
+# summary(cpuma_fixed)
+# 
+# Fixed Effects Model (non-log)
+# cpuma_fixed_linear <-lm(avgtime ~ avg_inc + factor(CPUMA0010) - 1, data = cpuma_summary)
+# summary(cpuma_fixed_linear)
+
+# CPUMA and Year fixed effects 
+cpuma_fixed_metro <-lm(avgtime ~ log(avg_inc) + prop_white + prop_bach +
+                            prop_bach:prop_white + factor(YEAR) - 1 + 
+                            factor(CPUMA0010) - 1, 
+                         data = cpuma_summary_metro)
+summary(cpuma_fixed_metro)
+
+# Heteroskedasticity Robust Fixed Effects Model
+coeftest(cpuma_fixed_metro, vcov = sandwich) 
+# Adding Fitted Values to dataframe
+#cpuma_summary$fit <- predict(cpuma_fixed_multiple)
+
+# Finding Average Fixed Effect and Slope Coefficient
+fixed_effects_df_metro <- as.data.frame(summary(cpuma_fixed_metro)$coefficients[,])
+# fe_slope <- fixed_effects_df[1,1]
+# fe_intercept <- mean(fixed_effects_df$Estimate[2:nrow(fixed_effects_df)])
+# intercept_df <- data.frame(fe_intercept, NA)
+# names(intercept_df)<-c("Estimate","Std. Error")
+# rownames(intercept_df) <- "(Intercept)"
+
+summary(cpuma_summary_metro$prop_white)
+summary(cpuma_summary_metro$prop_bach)
+```
+
+```{r, CPUMA preliminary Visualizations}
+library(ggplot2)
+image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/Winter2019"
+
+# Puma Income - Commute Time Scatterplot
+cpuma_trends <- ggplot(aes(x = avg_inc, y = avgtime), 
+                                  data = cpuma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_x_continuous(breaks = c(seq(0, 150000, by = 50000)), 
+                     limits = c(20000, 150000)) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50)) +
+  geom_vline(xintercept = median(cpuma_summary$avg_inc), 
+             color = "royalblue1", size = 0.75) + 
+  geom_smooth(method='lm',formula=y~x, color = "red", size = 0.75)
+cpuma_trends
+
+# Level - Log Visualization
+cpuma_trends_log <- ggplot(aes(x = log(avg_inc), y = avgtime), 
+                                  data = cpuma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "white") + 
+  labs(x = "Log(Yearly Income ($))", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50)) +
+  geom_vline(xintercept = log(median(cpuma_summary$avg_inc)), 
+             color = "royalblue1", size = 1) +
+  geom_smooth(method='lm',formula=y~x, color = "red", size = 1.5)
+cpuma_trends_log
+# Saving Plots
+ggsave("cpuma_trends.png", 
+       plot = cpuma_trends, 
+       path = image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave("cpuma_trends_log.png", 
+       plot = cpuma_trends_log, 
+       path = image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, Fixed Effects visualization}
+library(ggplot2)
+image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/Winter2019"
+# Fixed Effects Visualization with average FE as intercept (log model)
+cpuma_trends_log_fit <- ggplot(aes(x = log(avg_inc), y = avgtime), 
+                                  data = cpuma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "white") + 
+  labs(x = "Log(Yearly Income ($))", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50)) + 
+  geom_abline(color = "red", size = 1.5,
+              slope = fe_slope, intercept = fe_intercept)
+cpuma_trends_log_fit
+
+# Fixed Effect Visualization with average FE as intercept
+cpuma_trends_fit <- ggplot(aes(x = avg_inc, y = avgtime), 
+                                  data = cpuma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50))
+cpuma_trends_fit
+
+# Saving Plots
+ggsave("cpuma_trends_log_fit.png", 
+       plot = cpuma_trends_log_fit, 
+       path = image_loc, height = 7.5, width = 13.33, units = "in")
+# ggsave("cpuma_trends_log_fit.png", 
+#        plot = cpuma_trends_log_fit, 
+#        path = image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, CPUMA Animation}
+library(gganimate)
+cpuma_trends_animation <- ggplot(aes(x = avg_inc, y = avgtime), 
+                                  data = cpuma_summary) +
+  geom_point(alpha = 1/2, size = 2, colour = "white") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme_dark() + 
+  theme(plot.background = element_rect(fill = "black"),
+        axis.line = element_line(size = 0.5,
+                                 linetype = "solid", color = "white"),
+        axis.text = element_text(size = rel(1), color = "white"),
+        text = element_text(colour = "white"),
+        legend.background = element_rect(fill = "black"),
+        panel.background = element_rect(colour = "grey22", fill = "grey22"),
+        legend.key = element_rect(fill = "grey22", colour = "grey22"), 
+        axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_x_continuous(breaks = c(seq(0, 150000, by = 50000)), 
+                     limits = c(20000, 150000)) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50)) +
+  geom_vline(xintercept = median(cpuma_summary$avg_inc), 
+             color = "royalblue1", size = 0.75) +
+  transition_time(YEAR)
+cpuma_trends_animation
+
+anim_save("cpuma_trends_animation.gif",
+       plot = cpuma_trends_animation,
+       path = image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, Creating LA dataframe for Map}
+# Los Angeles
+LA_PUMAS <- df[df$MET2013 == 31080, ]
+LA_PUMAS10 <- df[df$MET2013 == 31080 & df$PUMA >= 03701 & df$PUMA <= 03769, ]
+LA_PUMAS10$PUMACE10 <- paste("0", LA_PUMAS10$PUMA, sep = "")
+LA_PUMAS2017 <- LA_PUMAS10[LA_PUMAS10$YEAR == 2017, ]
+  # Separating by LA PUMA
+puma_summary_LA <- LA_PUMAS10 %>% group_by(PUMA, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), avginc = mean(INCTOT))
+puma_summary_LA_2017 <- puma_summary_LA[puma_summary_LA$YEAR == 2017, ]
+
+puma_summary_LA_2017$PUMACE10 <- paste("0", puma_summary_LA_2017$PUMA, sep = "")
+
+# New York City
+NYC_PUMAS <- df[(df$STATEFIP == 34 |df$STATEFIP == 34) 
+                & df$YEAR >= 2012 & df$PUMA >= 3001 & 
+                  df$PUMA <= 4114 |
+                  (df$CPUMA0010 >= 591 & df$CPUMA0010 <= 616), ]
+  #Separating NYC by PUMA
+puma_summary_NYC <- NYC_PUMAS %>% group_by(PUMA, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), avginc = mean(INCTOT))
+puma_summary_NYC_2017 <- puma_summary_NYC[puma_summary_NYC$YEAR == 2017, ]
+
+puma_summary_NYC_2017$PUMACE10 <- paste("0", puma_summary_NYC_2017$PUMA, sep = "")
+
+# Chicago
+CHI_PUMAS <- df[df$STATEFIP == 17 & df$YEAR >= 2012 & df$PUMA >= 3420 & 
+                  df$PUMA <= 3532, ]
+  #Separating NYC by PUMA
+puma_summary_CHI <- CHI_PUMAS %>% group_by(PUMA, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), avginc = mean(INCTOT))
+puma_summary_CHI$PUMACE10 <- paste("0", puma_summary_CHI$PUMA, sep = "")
+puma_summary_CHI_2017 <- puma_summary_CHI[puma_summary_CHI$YEAR == 2017, ]
+```
+
+```{r, Change in Commute Time dataframe}
+change_by_puma_LA <- puma_summary_LA %>% group_by(PUMA) %>%
+  summarise(time_2012 = avgtime[YEAR == 2012], time_2017 = avgtime[YEAR == 2017], 
+            change_time = 100*(time_2017-time_2012)/time_2012)
+change_by_puma_LA$PUMACE10 <- paste("0", change_by_puma_LA$PUMA, sep = "")
+```
+
+```{r, PUMAS packages}
+library(dplyr)
+library(tigris)
+library(acs)
+library(stringr)
+library(leaflet)
+library(htmlwidgets)
+library(rgdal)
+# grab the spatial data (tigris)
+pumasCA <- pumas(state='CA', cb=TRUE)
+pumasNY <- pumas(state='NY', cb=TRUE)
+pumasNJ <- pumas(state='NJ', cb=TRUE)
+pumasNY <- rbind(pumasNY, pumasNJ)
+
+pumasIL <- pumas(state = "IL", cb = TRUE)
+pumasGA <- pumas(state = "GA", cb = TRUE)
+
+pumasLosAngeles <- pumasCA
+pumasLosAngeles <- subset(pumasLosAngeles, grepl("Los Angeles County", NAME10)) 
+
+pumasNYC <- pumasNY
+#pumasNYC <- subset(pumasNYC, grepl("Kings|Bronx|New York|Queens|Richmond|Rockland|Westchester|Nassau|Bronx|Suffolk", NAME10))
+
+api.key.install(key="cb7c86d43f6da5929636c833218df66d99ce6f0b")
+# create a geographic set to grab tabular data (acs)
+# geo <- geo.make(state=c('CA'), puma='*')
+# geo 
+```
+
+```{r, Merging and Plots}
+# comboCA <- merge(pumasCA, puma_summary_LA_2017, by = "PUMACE10")
+# Whole California with just LA highlighted
+# leaflet() %>% 
+#   addPolygons(data = comboCA, weight = 1.5, fillColor = ~pal(`avgtime`), 
+#               smoothFactor = 0.5, color = "black", fillOpacity = 1) %>%
+#   addProviderTiles(providers$CartoDB.Positron)
+  
+# Only Los Angeles County
+comboLA <- merge(pumasLosAngeles, puma_summary_LA_2017, by = "PUMACE10")
+# Commute Time Plot
+timepal <- colorNumeric(c("white", "red"), 22:42)
+leaflet() %>% 
+  addPolygons(data = comboLA, weight = 1.5, fillColor = ~timepal(`avgtime`), 
+              smoothFactor = 0.5, color = "black", fillOpacity = 0.7) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addLegend(pal = timepal, values = comboLA@data$`avgtime`, opacity = 0.7, title = NULL)
+# Income Plot
+incpal <- colorNumeric(c("blue", "white"), 20000:140000)
+leaflet() %>% 
+  addPolygons(data = comboLA, weight = 1.5, fillColor = ~incpal(`avginc`), 
+              smoothFactor = 0.5, color = "black", fillOpacity = 0.7) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addLegend(pal = incpal, values = comboLA@data$`avginc`, opacity = 0.7, title = NULL)
+
+# New York City Plots
+comboNYC <- merge(pumasNYC, puma_summary_NYC_2017, by = "PUMACE10")
+# Commute Time Plot
+timepal <- colorNumeric(c("white", "blue"), 20:50)
+leaflet() %>% 
+  addPolygons(data = comboNYC, weight = 1.5, fillColor = ~timepal(`avgtime`), 
+              smoothFactor = 0.5, color = "black", fillOpacity = 0.7) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addLegend(pal = timepal, values = comboNYC@data$`avgtime`, opacity = 0.7, title = NULL)
+# Income Plot
+incpal <- colorNumeric(c("white", "green"), 20000:130000)
+leaflet() %>% 
+  addPolygons(data = comboNYC, weight = 1.5, fillColor = ~incpal(`avginc`), 
+              smoothFactor = 0.5, color = "black", fillOpacity = 0.7) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addLegend(pal = incpal, values = comboNYC@data$`avginc`, opacity = 0.7, title = NULL)
+
+# Chicago Plot
+comboCHI <- merge(pumasIL, puma_summary_CHI_2017, by = "PUMACE10")
+# Commute Time Plot
+timepal <- colorNumeric(c("white", "red"), 22:42)
+leaflet() %>% 
+  addPolygons(data = comboCHI, weight = 1.5, fillColor = ~timepal(`avgtime`), 
+              smoothFactor = 0.5, color = "black", fillOpacity = 0.7) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addLegend(pal = timepal, values = comboCHI@data$`avgtime`, opacity = 0.7, title = NULL)
+# Income Plot
+incpal <- colorNumeric(c("red", "white"), 20000:140000)
+leaflet() %>% 
+  addPolygons(data = comboCHI, weight = 1.5, fillColor = ~incpal(`avginc`), 
+              smoothFactor = 0.5, color = "black", fillOpacity = 0.7) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addLegend(pal = incpal, values = comboCHI@data$`avginc`, opacity = 0.7, title = NULL)
+
+```
+
+```{r, Change Visualizations}
+changeLA <- merge(pumasLosAngeles, change_by_puma_LA, by = "PUMACE10")
+changepal <- colorNumeric(c("blue", "white", "red"), -25:25)
+
+leaflet() %>% 
+  addPolygons(data = changeLA, weight = 1.5, fillColor = ~changepal(`change_time`),
+              smoothFactor = 0.5, color = "black", fillOpacity = 0.7) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addLegend(pal = changepal, values = changeLA@data$`change_time`, opacity = 0.7, title = NULL)
+```
+
+```{r, LA OLS Analysis}
+library(stargazer)
+LA_cpumas <- df[df$CPUMA0010 >= 71 & df$CPUMA0010 <= 99, ]
+LA_CPUMA_Summary <- LA_cpumas %>% group_by(CPUMA0010, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME), 
+            avg_inc = mean(INCTOT), median_inc = median(INCTOT),
+            prop_white = sum(RACE == 1)*100/n(),
+            prop_bach = sum(EDUCD == 101 | (EDUCD >= 114 & EDUCD <= 116) )*100/n() )
+cpuma_fixed_LA <-lm(log(avgtime) ~ log(avg_inc) + prop_white + prop_bach +
+                            prop_bach:prop_white + factor(YEAR) - 1 + 
+                            factor(CPUMA0010) - 1, 
+                         data = LA_CPUMA_Summary)
+summary(cpuma_fixed_LA)
+stargazer(cpuma_fixed_LA)
+
+lm3 <- lm(TRANTIME ~ log(INCTOT) + factor(RACE)-1 + factor(EDUCD)-1 + 
+            (factor(RACE)-1):(factor(EDUCD - 1)) +
+            factor(YEAR) - 1 + factor(CPUMA0010) - 1, 
+                         data = LA_cpumas)
+OLS_LA_df <- as.data.frame(summary(lm3)$coefficients[,])
+
+lm4 <- lm(TRANTIME ~ log(INCTOT) + factor(RACE)-1 + factor(EDUCD)-1 + 
+            (factor(RACE)-1):(factor(EDUCD - 1)) +
+            factor(YEAR) - 1 + factor(SEX)-1 + factor(HISPAN)-1 +
+            factor(CITIZEN) - 1, 
+                         data = LA_cpumas)
+OLS_LA_df2 <- as.data.frame(summary(lm4)$coefficients[,])
+summary(lm4)
+
+LA_cpumas <- LA_cpumas[LA_cpumas$TRANTIME != 0, ]
+
+OLS_LA3 <- lm(log(TRANTIME) ~ log(INCTOT) + factor(RACE)-1 + factor(EDUCD)-1 + 
+            (factor(RACE)-1):(factor(EDUCD - 1)) +
+            factor(YEAR) - 1 + factor(SEX)-1 + factor(HISPAN)-1 +
+            factor(CITIZEN) - 1 +
+            factor(TRANWORK) -1 +
+            factor(CPUMA0010) - 1, 
+                         data = LA_cpumas)
+OLS_LA_df3 <- as.data.frame(summary(OLS_LA3)$coefficients[,])
+summary(OLS_LA3)
+stargazer(OLS_LA3)
+
+OLS_LA4 <- lm(log(avgtime) ~ log(avg_inc), data = LA_CPUMA_Summary)
+
+OLS_LA5 <- lm(log(avgtime) ~ log(avg_inc) + prop_white + prop_bach + 
+                prop_white:prop_bach, data = LA_CPUMA_Summary)
+
+OLS_LA6 <- lm(log(avgtime) ~ log(avg_inc) + prop_white + prop_bach + 
+                prop_white:prop_bach + 
+                prop_white:log(avg_inc) +
+                prop_bach:log(avg_inc), data = LA_CPUMA_Summary)
+
+stargazer(OLS_LA4, OLS_LA5, OLS_LA6)
+```
+
+```{r, NYC OLS Analysis}
+NYC_cpumas <- df[(df$CPUMA0010 >= 674 & df$CPUMA0010 <= 755) | 
+                   (df$CPUMA0010 >= 591 & df$CPUMA0010 <= 616), ]
+NYC_CPUMA_Summary <- NYC_cpumas %>% group_by(CPUMA0010, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME), 
+            avg_inc = mean(INCTOT), median_inc = median(INCTOT),
+            prop_white = sum(RACE == 1)*100/n(),
+            prop_bach = sum(EDUCD == 101 | (EDUCD >= 114 & EDUCD <= 116) )*100/n() )
+NYC_cpumas <- NYC_cpumas[NYC_cpumas$TRANTIME != 0, ]
+
+OLS_NYC <- lm(log(avgtime) ~ log(avg_inc) + prop_white + prop_bach + 
+                prop_white:prop_bach + 
+                prop_white:log(avg_inc) +
+                prop_bach:log(avg_inc), data = NYC_CPUMA_Summary)
+
+CHI_cpumas <- df[df$CPUMA0010 >= 319 & df$CPUMA0010 <= 337, ]
+CHI_CPUMA_Summary <- CHI_cpumas %>% group_by(CPUMA0010, YEAR) %>% 
+  summarise(avgtime = mean(TRANTIME), mediantime = median(TRANTIME), 
+            avg_inc = mean(INCTOT), median_inc = median(INCTOT),
+            prop_white = sum(RACE == 1)*100/n(),
+            prop_bach = sum(EDUCD == 101 | (EDUCD >= 114 & EDUCD <= 116) )*100/n() )
+CHI_cpumas <- CHI_cpumas[CHI_cpumas$TRANTIME != 0, ]
+
+OLS_CHI <- lm(log(avgtime) ~ log(avg_inc) + prop_white + prop_bach + 
+                prop_white:prop_bach + 
+                prop_white:log(avg_inc) +
+                prop_bach:log(avg_inc), data = CHI_CPUMA_Summary)
+
+stargazer(OLS_LA6, OLS_NYC, OLS_CHI)
+```
+
+Final Visualizations: Light Theme
+
+```{r, Final CPUMA preliminary Visualizations}
+library(ggplot2)
+final_image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/FinalGraphs"
+
+# Puma Income - Commute Time Scatterplot
+cpuma_trends.f <- ggplot(aes(x = avg_inc, y = avgtime), 
+                                  data = cpuma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "black") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme(axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_x_continuous(breaks = c(seq(0, 150000, by = 50000)), 
+                     limits = c(20000, 150000)) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50)) +
+  geom_vline(xintercept = median(cpuma_summary$avg_inc), 
+             color = "royalblue1", size = 0.75) + 
+  geom_smooth(method='lm',formula=y~x, color = "red", size = 0.75)
+cpuma_trends.f
+
+# Level - Log Visualization
+cpuma_trends_log.f <- ggplot(aes(x = log(avg_inc), y = avgtime), 
+                                  data = cpuma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "black") + 
+  labs(x = "Log(Yearly Income ($))", y = "Commute Time (Minutes)") + 
+  theme(axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50)) +
+  geom_vline(xintercept = log(median(cpuma_summary$avg_inc)), 
+             color = "royalblue1", size = 1) +
+  geom_smooth(method='lm',formula=y~x, color = "red", size = 1.5)
+cpuma_trends_log.f
+
+# Log - Log Visualization
+cpuma_trends_log_log.f <- ggplot(aes(x = log(avg_inc), y = log(avgtime)), 
+                                  data = cpuma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "black") + 
+  labs(x = "Log(Yearly Income ($))", y = "Log(Commute Time (Minutes))") + 
+  theme(axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  geom_vline(xintercept = log(median(cpuma_summary$avg_inc)), 
+             color = "royalblue1", size = 1) +
+  geom_smooth(method='lm',formula=y~x, color = "red", size = 1.5)
+cpuma_trends_log_log.f
+
+# Saving Plots
+ggsave("cpuma_trends.png", 
+       plot = cpuma_trends.f, 
+       path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+ggsave("cpuma_trends_log.png", 
+       plot = cpuma_trends_log.f, 
+       path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("cpuma_trends_log_log.png", 
+       plot = cpuma_trends_log_log.f, 
+       path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, Final Fixed Effects visualization}
+library(ggplot2)
+final_image_loc = "~/Box Sync/Winter2019/Senior Thesis/Thesis Images/FinalGraphs"
+# Fixed Effects Visualization with average FE as intercept (log model)
+cpuma_trends_log_fit.f <- ggplot(aes(x = log(avg_inc), y = avgtime), 
+                                  data = cpuma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "black") + 
+  labs(x = "Log(Yearly Income ($))", y = "Commute Time (Minutes)") + 
+  theme(axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50)) + 
+  geom_abline(color = "red", size = 1.5,
+              slope = fe_slope, intercept = fe_intercept)
+cpuma_trends_log_fit.f
+
+# Fixed Effect Visualization with average FE as intercept
+cpuma_trends_fit.f <- ggplot(aes(x = avg_inc, y = avgtime), 
+                                  data = cpuma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "black") + 
+  labs(x = "Yearly Income ($)", y = "Commute Time (Minutes)") + 
+  theme(axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  scale_y_continuous(breaks = c(seq(10, 60, by = 10)), limits = c(15,50))
+cpuma_trends_fit.f
+
+# Fixed Effects Visualization with average FE as intercept (log model)
+cpuma_trends_log_log_fit.f <- ggplot(aes(x = log(avg_inc), y = log(avgtime)), 
+                                  data = cpuma_summary) +
+  geom_point(alpha = 1/4, size = 1.5, colour = "black") + 
+  labs(x = "Log(Yearly Income ($))", y = "Log(Commute Time (Minutes))") + 
+  theme(axis.title.x = element_text(size = rel(1.5)), 
+        axis.title.y = element_text(size = rel(1.5))) +
+  geom_abline(color = "red", size = 1.5,
+              slope = fe_slope_log, intercept = fe_intercept_log)
+cpuma_trends_log_log_fit.f
+
+# Saving Plots
+ggsave("cpuma_trends_log_fit.png", 
+       plot = cpuma_trends_log_fit.f, 
+       path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+# ggsave("cpuma_trends_log_fit.png", 
+#        plot = cpuma_trends_log_fit, 
+#        path = image_loc, height = 7.5, width = 13.33, units = "in")
+
+ggsave("cpuma_trends_log_log_fit.png", 
+       plot = cpuma_trends_log_log_fit.f, 
+       path = final_image_loc, height = 7.5, width = 13.33, units = "in")
+```
+
+```{r, LA Distribution}
+library(ggplot2)
+distribution.LA <- ggplot(aes(x = INCTOT, y = TRANTIME), data = LA_cpumas) +
+  geom_point(alpha = 1/10, size = 0.5) + 
+  labs(x = "Total Yearly Income ($)", y = "Commute Time (Minutes)") +
+  geom_vline(xintercept = median(dfmetro$INCTOT), 
+             color = "royalblue1", size = 1.5) +
+  scale_x_continuous(breaks = c(seq(0, 1000000, by = 50000)), 
+                     limits = c(0, 1000000))
+distribution.LA
+```
